@@ -8,19 +8,21 @@ use App\Models\LoanRepaymentModel;
 use App\Models\LoanRequestModel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Str;
 
 class LoanController extends Controller
 {
 
-    use LoanCalculationService;
-
+    private $loanService;
+    public function __construct(LoanCalculationService $loanService)
+    {
+        $this->loanService = $loanService;
+    }
 
     public function createLoan(Request $request)
     {
         $validatedData = Validator::make($request->all(), [
             'amount' => ['required', 'numeric', "between:0,50000"],
-            'interest_amount' => ['required', "numeric", "between:0,15"],
+            'interest_percentage' => ['required', "numeric", "between:0,15"],
             'term' => ['required', 'numeric', "between:1,12"],
             'govt_id' => ['required', 'string']
         ]);
@@ -33,51 +35,28 @@ class LoanController extends Controller
             ], 400);
         }
 
-        $checkIfExists = LoanRequestModel::where("user_id", $request->user()->id)->where("status", "<>", config("constants.LOAN_STATES.PAID"))->get();
-        if ($checkIfExists->count() < 2) {
+        $createLoanService = $this->loanService->createLoan($request->user()->id, $request->all());
 
-            $reqArray = $request->all();
-            $reqArray["id"] = Str::uuid();
-            $reqArray["user_id"] = $request->user()->id;
-            $reqArray["status"] = config("constants.LOAN_STATES.PENDING");
-            $reqArray["is_active"] = 1;
-
-            $createLoan = LoanRequestModel::create($reqArray);
-
-            if (isset($createLoan->id)) {
-                return response()->json([
-                    'status' => true,
-                    'data' => [],
-                    'error' => [],
-                    'message' => "Loan created successfully"
-                ]);
-            }
+        if ($createLoanService !== false) {
+            return response()->json([
+                'status' => true,
+                'data' => [],
+                'error' => [],
+                'message' => "Loan created successfully"
+            ]);
         } else {
             return response([
                 'status' => false,
                 'data' => [],
-                'error' => ["all" => "Only 2 active loans allowed"],
-                'message' => 'Only 2 active loans allowed'
+                'error' => ["all" => "Failed to create loan / cannot create more than 2 loans"],
+                'message' => 'Failed to create loan'
             ], 400);
         }
-
-        return response()->json([
-            'status' => false,
-            'data' => [],
-            'error' => ["all" => "Failed to create loan request"],
-            'message' => "Failed to create loan request"
-        ]);
     }
 
     public function viewLoan(Request $request)
     {
-        $getUserLoans = LoanRequestModel::where("user_id", $request->user()->id)->whereNull("deleted_at");
-
-        if ($request->has("search") && !empty($request->search)) {
-            $getUserLoans = $getUserLoans->where("id", $request->search);
-        }
-
-        $getUserLoans = $getUserLoans->paginate(config("constants.GLOBAL_PAGINATION_COUNT"));
+        $getUserLoans = $this->loanService->viewLoans($request->user()->id, $request->get('search'));
 
         if ($getUserLoans->count() < 1) {
             return response()->json([
@@ -111,74 +90,23 @@ class LoanController extends Controller
             ], 400);
         }
 
+        $repayLoan = $this->loanService->repayLoan($loanId, $request->user()->id, $request->all());
 
-        $getUserLoanDetails = LoanRequestModel::where("user_id", $request->user()->id)->whereNull("deleted_at")->where("id", $loanId)->where("status", config("constants.LOAN_STATES.APPROVED"))->first();
-
-        if (!empty($getUserLoanDetails) && $getUserLoanDetails->status != config("constants.LOAN_STATES.PAID")) {
-
-
-            $checkAmountDetails = $this->calculatePendingAmount($getUserLoanDetails);
-
-            if (strtoupper($request->payment_status) !== "COMPLETED") {
-
-                $insertTerm = LoanRepaymentModel::create([
-                    "loan_id" => $loanId,
-                    "user_id" => $request->user()->id,
-                    "paid_amount" => $request->paid_amount,
-                    "term_count" => ($checkAmountDetails["terms_completed"] + 1),
-                    "is_active" => 1,
-                    "payment_status" => config("constants.PAYMENT_STATUS." . strtoupper($request->payment_status))
-                ]);
-
+        if (isset($repayLoan["type"])) {
+            if ($repayLoan["type"] == "payment_success") {
                 return response([
-                    'status' => false,
-                    'error' => ["all" => "Payment Failed"],
-                    'message' => 'Payment Failed'
-                ], 400);
-            }
-
-            if ($request->paid_amount >= round($checkAmountDetails["per_term"])) {
-
-                $insertTerm = LoanRepaymentModel::create([
-                    "loan_id" => $loanId,
-                    "user_id" => $request->user()->id,
-                    "paid_amount" => $request->paid_amount,
-                    "term_count" => ($checkAmountDetails["terms_completed"] + 1),
-                    "is_active" => 1,
-                    "payment_status" => config("constants.PAYMENT_STATUS.COMPLETED")
-                ]);
-                if ($insertTerm) {
-                    $getLoanDetails = LoanRequestModel::where("id", $loanId)->first();
-                    $data = [];
-                    $message = 'Amount Paid successfully';
-                    $recalc = $this->calculatePendingAmount($getLoanDetails);
-                    $data["pending_amount"] = $recalc["pending"];
-
-                    if ($recalc["pending"] < 1) {
-                        $c = LoanRequestModel::where("id", $loanId)->update(["status" => config("constants.LOAN_STATES.PAID")]);
-                        if ($c) {
-                            $message = "Amount paid & loan completed successfully";
-                        }
-                    }
-                    return response([
-                        'status' => true,
-                        'error' => [],
-                        'data' => $data,
-                        'message' => $message
-                    ], 200);
-                }
-            } else {
-                return response([
-                    'status' => false,
-                    'error' => ["all" => "Amount is lesser than the term amount , pay an amount of " . ceil($checkAmountDetails["per_term"])],
-                    'message' => 'Repayment Failed'
-                ], 400);
+                    'status' => true,
+                    'error' => [],
+                    "data" => [],
+                    'message' => $repayLoan["message"] ?? "Payment Successfull"
+                ], 200);
             }
         }
         return response([
             'status' => false,
-            'error' => ["all" => "Payment Failed"],
-            'message' => 'Payment Failed'
+            'error' => [],
+            "data" => [],
+            'message' => $repayLoan["message"] ?? 'Repayment Failed'
         ], 400);
     }
 }

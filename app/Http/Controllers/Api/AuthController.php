@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Services\AuthService;
 use App\Models\User;
 use App\Models\UserCompanyMapping;
 use App\Models\UserRoleMapping;
@@ -14,12 +15,17 @@ use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
+    private $authService;
+    public function __construct(AuthService $authService)
+    {
+        $this->authService = $authService;
+    }
 
 
     public function Register(Request $request)
     {
         $validatedData = Validator::make($request->all(), [
-            'name' => ["required","string"],
+            'name' => ["required", "string"],
             'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
             'password' => ['required', 'string', 'min:8'],
         ]);
@@ -33,13 +39,10 @@ class AuthController extends Controller
             ], 400);
         }
 
+        $getUser = $this->authService->createUser($request->all());
 
-        $request->merge(["is_active" => 1,"password" => Hash::make($request->password)]);
-        $user = User::create($request->all());
-
-
-        if (isset($user->id)) {
-            $accessToken = $user->createToken('tokens')->plainTextToken;
+        if ($getUser !== false) {
+            $accessToken = $getUser->createToken('tokens')->plainTextToken;
             return response([
                 'status' => true,
                 'token' => $accessToken,
@@ -50,7 +53,7 @@ class AuthController extends Controller
 
         return response([
             'status' => false,
-            'error' => ["all"=>"Something went wrong"],
+            'error' => ["all" => "Something went wrong"],
             'data' => [],
             'message' => "Invalid Request"
 
@@ -74,25 +77,22 @@ class AuthController extends Controller
             ], 400);
         }
 
-        if (!Auth::attempt(["email" => $request->email, "password" => $request->password, "is_active" => 1], $request->remember_me)) {
+        $loginUser = $this->authService->loginUser($request->all());
+
+        if ($loginUser !== false) {
             return response()->json([
-                'status' => false,
-                'error' => ["all"=>"Invalid Username or Password"],
-                'data' => [],
-                'message' => 'Invalid Username or Password'
-            ], 400);
+                'status' => true,
+                'data' => ['token' => $loginUser],
+                'error' => [],
+                "message" => "Login successfulI",
+            ]);
         }
-
-        $user = $request->user();
-        $tokenResult = $user->createToken('tokens')->plainTextToken;
-
-        return response()->json([
-            'status' => true,
-            'data' => ['token' => $tokenResult],
-            'error' => [],
-            "message" => "Login successfulI"
-            ,
-        ]);
+        return response([
+            'status' => false,
+            'error' => ["all" => "Login failedI"],
+            'data' => [],
+            'message' => 'Login Failed'
+        ], 400);
     }
 
     public function logout(Request $request)
@@ -104,7 +104,4 @@ class AuthController extends Controller
             'message' => 'Successfully logged out'
         ]);
     }
-
-
-
 }

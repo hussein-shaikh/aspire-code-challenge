@@ -3,12 +3,18 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Services\LoanCalculationService;
 use App\Models\LoanRequestModel;
 use Illuminate\Http\Request;
 
 class LoanController extends Controller
 {
 
+    private $loanService;
+    public function __construct(LoanCalculationService $loanService)
+    {
+        $this->loanService = $loanService;
+    }
 
     public function viewLoan(Request $request, $type = "PENDING")
     {
@@ -22,18 +28,7 @@ class LoanController extends Controller
             ]);
         }
 
-        $getAllLoans = LoanRequestModel::where("status", config("constants.LOAN_STATES")[strtoupper($type)])->where("is_active", 1);
-
-        if ($request->has("searchByUser") && !empty($request->searchByUser)) {
-            $getAllLoans = $getAllLoans->where("user_id", $request->searchByUser);
-        }
-
-        if ($request->has("searchByLoan") && !empty($request->searchByLoan)) {
-            $getAllLoans = $getAllLoans->where("id", $request->searchByLoan);
-        }
-
-        $getAllLoans = $getAllLoans->paginate(config("constants.GLOBAL_PAGINATION_COUNT"));
-
+        $getAllLoans = $this->loanService->viewloanWithStates($type, $request->all());
 
         if ($getAllLoans->count() > 0) {
             return response()->json([
@@ -56,17 +51,7 @@ class LoanController extends Controller
     public function approveLoanRequest($id, Request $request)
     {
 
-        $getLoanDetails = LoanRequestModel::where("id", $id)->first();
-        if (empty($getLoanDetails) || (isset($getLoanDetails->status) && $getLoanDetails->status != "PENDING")) {
-            return response()->json([
-                'status' => false,
-                'data' => [],
-                'error' => ["all" => "No loan requests found / not in pending state"],
-                'message' => "No loan requests found / not in pending state"
-            ], 400);
-        }
-
-        $approve = LoanRequestModel::where("id", $id)->update(["status" => config("constants.LOAN_STATES.APPROVED")]);
+        $approve = $this->loanService->loanApproval($id);
         if ($approve) {
             return response()->json([
                 'status' => true,
@@ -75,23 +60,20 @@ class LoanController extends Controller
                 'message' => "Loan Approved successfully"
             ]);
         }
+
+        return response()->json([
+            'status' => false,
+            'data' => [],
+            'error' => ["all" => "Failed to approve loan"],
+            'message' => "Failed to approve loan"
+        ], 400);
     }
 
     public function rejectLoanRequest($id, Request $request)
     {
 
-        $getLoanDetails = LoanRequestModel::where("id", $id)->first();
-        if (empty($getLoanDetails) || (isset($getLoanDetails->status) && ($getLoanDetails->status != "PENDING" || $getLoanDetails->status == "REJECTED"))) {
-            return response()->json([
-                'status' => false,
-                'data' => [],
-                'error' => ["all" => "No loan requests found / not in pending state / already rejected"],
-                'message' => "No loan requests found / not in pending state / already rejected"
-            ], 400);
-        }
-
-        $approve = LoanRequestModel::where("id", $id)->update(["status" => config("constants.LOAN_STATES.REJECTED")]);
-        if ($approve) {
+        $rejectLoan = $this->loanService->loanRejection($id);
+        if ($rejectLoan) {
             return response()->json([
                 'status' => true,
                 'data' => [],
@@ -99,5 +81,11 @@ class LoanController extends Controller
                 'message' => "Loan Rejected successfully"
             ]);
         }
+        return response()->json([
+            'status' => false,
+            'data' => [],
+            'error' => ["all" => "Failed to reject loan"],
+            'message' => "Failed to reject loan"
+        ], 400);
     }
 }
