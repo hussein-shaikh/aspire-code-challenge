@@ -5,7 +5,9 @@ namespace App\Http\Services;
 
 use App\Models\LoanRepaymentModel;
 use App\Models\LoanRequestModel;
+use App\Models\RoleModel;
 use App\Models\User;
+use App\Models\UserRoleMappingModel;
 use Exception;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -16,10 +18,13 @@ class  AuthService
 
     public function createUser($params = [])
     {
-
+        $params["id"] = Str::uuid();
         $params["is_active"] = 1;
         $params["password"] = Hash::make($params["password"]);
         $user = User::create($params);
+
+        $roleId = RoleModel::where("name","user")->first();
+        UserRoleMappingModel::create(["user_id"=>$params["id"],"role_id"=>$roleId->id,"is_active"=>1]);
 
         if ($user) {
             return $user;
